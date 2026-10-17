@@ -1,0 +1,135 @@
+# CD — runs only on main. Plan with the read-only identity, encrypt the saved
+# plan (this repo is public and plan files can contain sensitive values),
+# pause for human approval on the `production` environment, then apply EXACTLY
+# the reviewed plan with the environment-scoped deploy identity.
+name: cd
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-dev # never two applies against the same state
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: "~1.13"
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  WORKDIR: environments/dev
+  ARM_USE_OIDC: "true"
+  ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+  TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+jobs:
+  static:
+    uses: ./.github/workflows/_static-checks.yml
+    permissions:
+      contents: read
+      security-events: write
+
+  plan:
+    name: plan
+    needs: static
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARM_CLIENT_ID: ${{ vars.AZURE_PLAN_CLIENT_ID }}
+      TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
+    outputs:
+      has_changes: ${{ steps.plan.outputs.has_changes }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform init
+        run: terraform -chdir=$WORKDIR init -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}"
+
+      - name: terraform plan
+        id: plan
+        run: |
+          set +e
+          terraform -chdir=$WORKDIR plan -var-file=dev.tfvars -lock-timeout=5m -detailed-exitcode -out=tfplan
+          code=$?
+          set -e
+          if [ "$code" -eq 1 ]; then exit 1; fi
+          echo "has_changes=$([ "$code" -eq 2 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          terraform -chdir=$WORKDIR show -no-color tfplan > plan.txt
+          { echo '### Plan for approval'; echo '```hcl'; head -c 60000 plan.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: encrypt plan artifact
+        if: steps.plan.outputs.has_changes == 'true'
+        env:
+          PLAN_KEY: ${{ secrets.PLAN_ENCRYPTION_KEY }}
+        run: |
+          test -n "$PLAN_KEY" || { echo "::error::PLAN_ENCRYPTION_KEY secret is not set"; exit 1; }
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$PLAN_KEY" \
+              --symmetric --cipher-algo AES256 -o tfplan.gpg $WORKDIR/tfplan
+
+      - uses: actions/upload-artifact@v4
+        if: steps.plan.outputs.has_changes == 'true'
+        with:
+          name: tfplan-${{ github.sha }}
+          path: tfplan.gpg
+          retention-days: 3
+          if-no-files-found: error
+
+  apply:
+    name: apply (requires approval)
+    needs: plan
+    if: needs.plan.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    environment: production # required reviewer gate; deploy identity trusts ONLY this
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARM_CLIENT_ID: ${{ vars.AZURE_DEPLOY_CLIENT_ID }} # environment-level variable
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ github.sha }}
+
+      - name: decrypt plan
+        env:
+          PLAN_KEY: ${{ secrets.PLAN_ENCRYPTION_KEY }}
+        run: |
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$PLAN_KEY" \
+              -o $WORKDIR/tfplan --decrypt tfplan.gpg
+
+      - name: terraform init
+        run: terraform -chdir=$WORKDIR init -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}"
+
+      - name: terraform apply (reviewed plan only)
+        run: terraform -chdir=$WORKDIR apply -lock-timeout=5m tfplan
+
+      - name: azure login (for compliance summary)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_DEPLOY_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: policy compliance summary (meaningful from Week 4)
+        continue-on-error: true
+        run: |
+          az policy state summarize --query "results.{nonCompliantResources:nonCompliantResources,nonCompliantPolicies:nonCompliantPolicies}" -o json > compliance.json
+          { echo '### Azure Policy compliance after apply'; echo '```json'; cat compliance.json; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

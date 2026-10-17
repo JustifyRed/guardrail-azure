@@ -1,0 +1,5 @@
+# Store and check out text files with LF so `terraform fmt -check` on Linux
+# runners matches what is edited on Windows.
+* text=auto eol=lf
+*.png binary
+*.docx binary

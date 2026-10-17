@@ -1,0 +1,15 @@
+# Checkov configuration. Resource-level exceptions live INLINE next to the code
+# they cover (#checkov:skip=ID:POAM-xxx reason) so every reviewer sees them, and
+# each one has a matching entry in docs/poam.md. Global skips are a last resort.
+framework:
+  - terraform
+  - github_actions
+download-external-modules: false
+compact: true
+quiet: true
+skip-path:
+  - .terraform
+skip-check:
+  # destroy.yml takes a typed confirmation string only; it does not alter
+  # build output, so the SLSA-oriented rule does not apply. POAM-006.
+  - CKV_GHA_7

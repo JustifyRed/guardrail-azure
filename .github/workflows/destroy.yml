@@ -1,0 +1,53 @@
+# Manual teardown to stop spend between demos. Leaves the state backend
+# (bootstrap) untouched so the whole environment rebuilds from main in minutes.
+name: destroy
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "destroy-dev" to confirm'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-dev
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: "~1.13"
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  WORKDIR: environments/dev
+
+jobs:
+  destroy:
+    if: inputs.confirm == 'destroy-dev'
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_DEPLOY_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform init
+        run: terraform -chdir=$WORKDIR init -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}"
+
+      - name: terraform destroy
+        run: terraform -chdir=$WORKDIR destroy -var-file=dev.tfvars -lock-timeout=5m -auto-approve

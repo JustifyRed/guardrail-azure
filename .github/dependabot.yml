@@ -1,0 +1,14 @@
+# Keeps GitHub Actions and Terraform providers current (SI-2 flaw remediation).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: terraform
+    directories:
+      - /bootstrap
+      - /environments/dev
+      - /modules/*
+    schedule:
+      interval: weekly

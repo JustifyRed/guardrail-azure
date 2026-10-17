@@ -1,0 +1,76 @@
+# Nightly drift detection. Any out-of-band change (portal click, CLI, another
+# tool) shows up as a non-empty plan and opens a tracked GitHub issue.
+# Control: CM-3 / CM-6 (configuration change control, configuration settings)
+# Note: GitHub disables scheduled workflows in repos with no activity for 60 days.
+name: drift
+
+on:
+  schedule:
+    - cron: "17 6 * * *" # 06:17 UTC daily, off the top of the hour
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-dev
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: "~1.13"
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  WORKDIR: environments/dev
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+    env:
+      ARM_USE_OIDC: "true"
+      ARM_CLIENT_ID: ${{ vars.AZURE_PLAN_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_subscription_id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      TF_VAR_alert_email: ${{ secrets.ALERT_EMAIL }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform init
+        run: terraform -chdir=$WORKDIR init -backend-config="storage_account_name=${{ vars.TF_STATE_STORAGE_ACCOUNT }}"
+
+      - name: detect drift
+        id: drift
+        run: |
+          set +e
+          terraform -chdir=$WORKDIR plan -var-file=dev.tfvars -detailed-exitcode -lock-timeout=5m -no-color > drift.txt
+          code=$?
+          set -e
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -eq 1 ]; then cat drift.txt; exit 1; fi
+
+      - name: open or update drift issue
+        if: steps.drift.outputs.exit_code == '2'
+        run: |
+          gh label create drift --color B60205 --description "Infrastructure differs from code" 2>/dev/null || true
+          title="Drift detected in dev ($(date -u +%Y-%m-%d))"
+          { echo "Nightly plan found differences between Azure and \`main\`."; echo; echo '```'; head -c 60000 drift.txt; echo '```'; echo; echo "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"; } > body.md
+          existing=$(gh issue list --label drift --state open --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file body.md
+          else
+            gh issue create --title "$title" --label drift --body-file body.md
+          fi
+
+      - name: no drift
+        if: steps.drift.outputs.exit_code == '0'
+        run: echo "No drift. Azure matches main." >> "$GITHUB_STEP_SUMMARY"

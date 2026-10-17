@@ -1,0 +1,13 @@
+# After the first successful `terraform apply`, rename this file to backend.tf,
+# replace the storage account name with the `state_storage_account` output, then:
+#   terraform init -migrate-state
+# Your bootstrap state now lives in the hardened backend instead of your laptop.
+terraform {
+  backend "azurerm" {
+    resource_group_name  = "rg-guardrail-tfstate"
+    storage_account_name = "stguardrailtfXXXXX"
+    container_name       = "tfstate"
+    key                  = "bootstrap.tfstate"
+    use_azuread_auth     = true
+  }
+}

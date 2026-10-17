@@ -1,0 +1,63 @@
+# Reusable job: everything that runs WITHOUT Azure credentials.
+# Called by ci.yml and cd.yml so the same gates guard every path to Azure.
+name: static-checks
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  TF_VERSION: "~1.13"
+
+jobs:
+  static:
+    name: fmt · validate · tflint · checkov
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write # upload Checkov SARIF to the Security tab
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff
+
+      - name: terraform validate (every root and module)
+        run: |
+          set -euo pipefail
+          for dir in bootstrap environments/*/ modules/*/; do
+            echo "::group::validate $dir"
+            terraform -chdir="$dir" init -backend=false -input=false >/dev/null
+            terraform -chdir="$dir" validate
+            echo "::endgroup::"
+          done
+
+      - uses: terraform-linters/setup-tflint@v4
+
+      - name: tflint
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # avoids rate limits when downloading the azurerm ruleset
+        run: |
+          tflint --init --config "$GITHUB_WORKSPACE/.tflint.hcl"
+          tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl" --format compact
+
+      - name: checkov (security gate — fails on any unsuppressed finding)
+        uses: bridgecrewio/checkov-action@v12
+        with:
+          directory: .
+          config_file: .checkov.yaml
+          output_format: cli,sarif
+          output_file_path: console,results.sarif
+
+      - name: upload SARIF to code scanning
+        if: always() && hashFiles('results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: results.sarif
+          category: checkov
