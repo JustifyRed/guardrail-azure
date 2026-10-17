@@ -20,6 +20,16 @@ variable "github_repo" {
   default     = "guardrail-azure"
 }
 
+variable "github_owner_id" {
+  description = "Immutable numeric ID of the GitHub owner: `gh api users/<owner> --jq .id`."
+  type        = number
+}
+
+variable "github_repo_id" {
+  description = "Immutable numeric ID of the repository: `gh api repos/<owner>/<repo> --jq .id`."
+  type        = number
+}
+
 variable "deploy_environment" {
   description = "GitHub Environment name that gates terraform apply. Must match cd.yml."
   type        = string

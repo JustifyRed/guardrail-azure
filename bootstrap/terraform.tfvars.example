@@ -3,3 +3,9 @@ subscription_id = "00000000-0000-0000-0000-000000000000"
 github_owner    = "your-github-username"
 github_repo     = "guardrail-azure"
 location        = "eastus"
+
+# Immutable IDs (GitHub's OIDC subject includes them). Create the repo first, then:
+#   gh api users/<owner> --jq .id
+#   gh api repos/<owner>/guardrail-azure --jq .id
+github_owner_id = 0
+github_repo_id  = 0

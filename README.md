@@ -71,7 +71,9 @@ environment, or changing the identities' permissions. Everything else goes throu
 
 ```bash
 cd bootstrap
-cp terraform.tfvars.example terraform.tfvars   # fill in subscription_id and github_owner
+cp terraform.tfvars.example terraform.tfvars   # fill in subscription_id, github_owner and the two IDs
+gh api users/<your-github-username> --jq .id             # -> github_owner_id
+gh api repos/<your-github-username>/guardrail-azure --jq .id  # -> github_repo_id
 terraform init
 terraform plan -out=bootstrap.tfplan            # read it before applying
 terraform apply bootstrap.tfplan
@@ -123,7 +125,7 @@ git switch -c week2-test && <edit> && git push -u origin week2-test && gh pr cre
 
 ### Troubleshooting
 - **`AuthorizationFailed` right after bootstrap** — role assignments take up to ~5 minutes to propagate. Re-run.
-- **`AADSTS70021: No matching federated identity record`** — the repo owner/name in `terraform.tfvars` does not match GitHub exactly (case-sensitive), or the job is not running where you expect (PR vs main vs environment).
+- **`AADSTS700213: No matching federated identity record`** — compare the *presented assertion subject* in the error with the federated credential. GitHub's subject includes immutable IDs (`repo:Owner@123/repo@456:...`); check `github_owner_id` / `github_repo_id` in `terraform.tfvars`, exact casing of the owner and repo names, and that the job is running where you expect (PR vs main vs environment).
 - **Budget creation fails** — some offer types restrict budgets until the subscription is upgraded to pay-as-you-go. Comment out the budget resource, keep the action group, and restore it after upgrading.
 
 ## Roadmap

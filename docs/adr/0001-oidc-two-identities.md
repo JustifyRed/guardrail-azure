@@ -15,6 +15,10 @@ both propose and execute any change, including granting itself more access.
   - **plan** — Reader + state lock access. Trusts `pull_request` and `refs/heads/main`.
   - **deploy** — write roles. Trusts **only** `environment:production`, which
     requires a human approval in GitHub.
+- Bind trust to GitHub's **immutable numeric IDs**, not names. GitHub's OIDC
+  subject is `repo:<owner>@<owner_id>/<repo>@<repo_id>:<context>`, so a repo
+  that is deleted and re-created under the same name by someone else cannot
+  inherit this Azure trust (repo-resurrection / name-squatting attack).
 - Constrain the deploy identity's RBAC Administrator role with an ABAC condition
   so it cannot assign Owner, User Access Administrator or RBAC Administrator.
 
